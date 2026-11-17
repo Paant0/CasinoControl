@@ -1,16 +1,20 @@
 CasinoControl en Java 21
 
+EJECUCIÓN LOCAL
 1. Instala Java 21 y Maven.
-2. Copia tu index.html y styles.css actuales en:
-   src/main/resources/static/
-3. Abre una terminal en esta carpeta.
-4. Ejecuta: mvn compile exec:java
-5. Abre: http://127.0.0.1:8000
+2. Abre una terminal en la carpeta raíz del proyecto.
+3. Ejecuta: mvn compile exec:java
+4. Abre: http://127.0.0.1:8000
 
-La API conserva las rutas:
+La interfaz se sirve desde src/main/resources/static/ y usa styles.css.
+La API conserva estas rutas:
 GET    /api/fallas
 POST   /api/fallas
 POST   /api/fallas/{id}/tecnico
 PATCH  /api/fallas/{id}
 
 Los datos se guardan en datos_casinocontrol.json en la carpeta desde donde ejecutes Maven.
+
+GITHUB PAGES
+La carpeta docs/ publica únicamente la interfaz visual. GitHub Pages no ejecuta el servidor Java,
+por lo que los formularios y reportes requieren tener el backend desplegado en un servidor.

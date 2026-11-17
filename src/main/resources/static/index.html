@@ -204,6 +204,12 @@
 
       });
 
+      const tipoContenido = respuesta.headers.get('content-type') || '';
+
+      if (!tipoContenido.includes('application/json')) {
+        throw new Error('El backend Java no está conectado. Esta versión muestra la interfaz visual; para consultar y guardar reportes, inicia el servidor Java.');
+      }
+
       const datos = await respuesta.json();
 
       if (!respuesta.ok || datos.ok === false) throw new Error(datos.mensaje || 'Ocurrió un error.');
@@ -266,7 +272,8 @@
 
       } catch (error) {
 
-        mostrarMensaje(error.message, 'error');
+        $('tablaFallas').innerHTML = '<tr><td colspan="8" class="empty">No hay conexión con el servidor de datos. Inicia el backend Java para consultar los reportes.</td></tr>';
+        mostrarMensaje(error.message, 'info');
 
       }
 
