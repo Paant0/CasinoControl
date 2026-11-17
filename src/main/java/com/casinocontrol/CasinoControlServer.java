@@ -4,329 +4,245 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.time.OffsetDateTime;
-import java.time.ZoneId;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.concurrent.Executors;
 
 public class CasinoControlServer {
-    private static final String HOST = "127.0.0.1";
-    private static final int PORT = 8000;
-    private static final String[] ESTADOS = {
-        "Pendiente", "En diagnóstico", "En reparación", "Solucionada"
-    };
 
-    private static final ObjectMapper JSON = new ObjectMapper();
-    private static final Object LOCK = new Object();
-    private static final Path DATA_FILE = Path.of("datos_casinocontrol.json");
-    private static final Path STATIC_DIR = Path.of("src/main/resources/static");
+    static final int PUERTO = 8000;
+    static final ObjectMapper JSON = new ObjectMapper();
+    static final Path ARCHIVO = Path.of("datos_casinocontrol.json");
+    static final Path WEB = Path.of("src/main/resources/static");
 
     public static void main(String[] args) throws IOException {
-        HttpServer server = HttpServer.create(new InetSocketAddress(HOST, PORT), 0);
-        server.createContext("/", CasinoControlServer::handleRequest);
-        server.setExecutor(Executors.newCachedThreadPool());
-        server.start();
+        HttpServer servidor = HttpServer.create(
+                new InetSocketAddress("127.0.0.1", PUERTO), 0);
 
-        System.out.println("CasinoControl está funcionando.");
-        System.out.println("Abre en tu navegador: http://" + HOST + ":" + PORT);
-        System.out.println("Para detener el servidor, presiona Ctrl + C.");
+        servidor.createContext("/", CasinoControlServer::atender);
+        servidor.start();
+
+        System.out.println("CasinoControl funcionando en http://127.0.0.1:8000");
     }
 
-    private static void handleRequest(HttpExchange exchange) throws IOException {
-        String method = exchange.getRequestMethod();
-        String path = exchange.getRequestURI().getPath();
+    // Recibe las solicitudes de la página y llama a la función correspondiente.
+    static void atender(HttpExchange solicitud) throws IOException {
+        String metodo = solicitud.getRequestMethod();
+        String ruta = solicitud.getRequestURI().getPath();
 
         try {
-            if ("GET".equals(method) && "/api/fallas".equals(path)) {
-                synchronized (LOCK) {
-                    ArrayNode data = loadData();
-                    sendJson(exchange, 200, object("fallas", addElapsedHours(data)));
-                }
-                return;
+            if (ruta.equals("/api/fallas") && metodo.equals("GET")) {
+                consultarFallas(solicitud);
+            } else if (ruta.equals("/api/fallas") && metodo.equals("POST")) {
+                registrarFallas(solicitud);
+            } else if (ruta.matches("/api/fallas/[^/]+/tecnico") && metodo.equals("POST")) {
+                asignarTecnico(solicitud, ruta);
+            } else if (ruta.matches("/api/fallas/[^/]+") && metodo.equals("PATCH")) {
+                actualizarFalla(solicitud, ruta);
+            } else if (metodo.equals("GET")) {
+                mostrarPagina(solicitud, ruta);
+            } else {
+                responder(solicitud, 404, mensaje("Opción no encontrada."));
             }
-
-            if ("GET".equals(method)) {
-                serveStaticFile(exchange, path);
-                return;
-            }
-
-            if ("POST".equals(method)) {
-                handlePost(exchange, path);
-                return;
-            }
-
-            if ("PATCH".equals(method)) {
-                handlePatch(exchange, path);
-                return;
-            }
-
-            sendJson(exchange, 405, object("ok", false, "mensaje", "Método no permitido."));
         } catch (Exception e) {
-            e.printStackTrace();
-            sendJson(exchange, 500, object("ok", false, "mensaje", "Error interno del servidor."));
+            responder(solicitud, 500, mensaje("Ocurrió un error."));
         } finally {
-            exchange.close();
+            solicitud.close();
         }
     }
 
-    private static void serveStaticFile(HttpExchange exchange, String requestPath) throws IOException {
-        String fileName;
-        if ("/".equals(requestPath) || "/index.html".equals(requestPath)) {
-            fileName = "index.html";
-        } else if ("/styles.css".equals(requestPath)) {
-            fileName = "styles.css";
-        } else {
-            sendJson(exchange, 404, object("ok", false, "mensaje", "Recurso no encontrado."));
+    // Muestra el HTML y el CSS.
+    static void mostrarPagina(HttpExchange solicitud, String ruta) throws IOException {
+        String nombre = ruta.equals("/styles.css") ? "styles.css" : "index.html";
+        Path archivo = WEB.resolve(nombre);
+
+        if (!Files.exists(archivo)) {
+            responder(solicitud, 404, mensaje("Archivo no encontrado."));
             return;
         }
 
-        Path file = STATIC_DIR.resolve(fileName).normalize();
-        if (!Files.exists(file)) {
-            sendJson(exchange, 404, object("ok", false,
-                "mensaje", "No se encontró " + fileName + " en " + STATIC_DIR));
+        byte[] contenido = Files.readAllBytes(archivo);
+        String tipo = nombre.endsWith(".css")
+                ? "text/css; charset=utf-8"
+                : "text/html; charset=utf-8";
+
+        solicitud.getResponseHeaders().set("Content-Type", tipo);
+        solicitud.sendResponseHeaders(200, contenido.length);
+        solicitud.getResponseBody().write(contenido);
+    }
+
+    // Muestra los reportes guardados.
+    static void consultarFallas(HttpExchange solicitud) throws IOException {
+        ArrayNode fallas = leerFallas();
+
+        for (JsonNode dato : fallas) {
+            ObjectNode falla = (ObjectNode) dato;
+            String fecha = falla.path("fecha_hora").asText();
+
+            try {
+                LocalDateTime registrada = LocalDateTime.parse(
+                        fecha, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+                double horas = Duration.between(registrada, LocalDateTime.now()).toMinutes() / 60.0;
+                falla.put("horas_transcurridas", Math.max(0, Math.round(horas * 10.0) / 10.0));
+            } catch (Exception e) {
+                falla.put("horas_transcurridas", 0);
+            }
+        }
+
+        ObjectNode respuesta = JSON.createObjectNode();
+        respuesta.set("fallas", fallas);
+        responder(solicitud, 200, respuesta);
+    }
+
+    // Registra un reporte si tiene los tres datos obligatorios.
+    static void registrarFallas(HttpExchange solicitud) throws IOException {
+        JsonNode datos = JSON.readTree(solicitud.getRequestBody());
+        ArrayNode reportes = JSON.createArrayNode();
+        reportes.add(datos);
+
+        ArrayNode fallas = leerFallas();
+        int registrados = 0;
+        int rechazados = 0;
+
+        for (JsonNode reporte : reportes) {
+            String maquina = texto(reporte, "codigo_maquina").trim();
+            String descripcion = texto(reporte, "descripcion").trim();
+            String operador = texto(reporte, "operador").trim();
+
+            if (!maquina.isEmpty() && !descripcion.isEmpty() && !operador.isEmpty()) {
+                ObjectNode falla = JSON.createObjectNode();
+                falla.put("id", "F-" + (fallas.size() + 1));
+                falla.put("codigo_maquina", maquina);
+                falla.put("descripcion", descripcion);
+                falla.put("fecha_hora", LocalDateTime.now().format(
+                        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")));
+                falla.put("operador", operador);
+                falla.put("tecnico", "Sin asignar");
+                falla.put("estado", "Pendiente");
+                falla.put("diagnostico", "Sin registrar");
+                falla.put("reparacion", "Sin registrar");
+
+                fallas.add(falla);
+                registrados++;
+            } else {
+                rechazados++;
+            }
+        }
+
+        guardarFallas(fallas);
+
+        ObjectNode respuesta = JSON.createObjectNode();
+        respuesta.put("ok", rechazados == 0);
+        respuesta.put("registrados", registrados);
+        respuesta.put("rechazados", rechazados);
+        respuesta.put("mensaje", rechazados == 0
+                ? "Reporte registrado correctamente."
+                : "Completa los datos obligatorios.");
+
+        responder(solicitud, rechazados == 0 ? 201 : 400, respuesta);
+    }
+
+    // Asigna un técnico a un reporte.
+    static void asignarTecnico(HttpExchange solicitud, String ruta) throws IOException {
+        String id = ruta.split("/")[3];
+        JsonNode datos = JSON.readTree(solicitud.getRequestBody());
+        String tecnico = texto(datos, "tecnico").trim();
+
+        ArrayNode fallas = leerFallas();
+        ObjectNode falla = buscarFalla(fallas, id);
+
+        if (falla == null || tecnico.isEmpty()) {
+            responder(solicitud, 400, mensaje("Revisa el reporte y el nombre del técnico."));
             return;
         }
 
-        byte[] content = Files.readAllBytes(file);
-        Headers headers = exchange.getResponseHeaders();
-        headers.set("Content-Type", "index.html".equals(fileName)
-            ? "text/html; charset=utf-8" : "text/css; charset=utf-8");
-        headers.set("Cache-Control", "no-store");
-        exchange.sendResponseHeaders(200, content.length);
-        exchange.getResponseBody().write(content);
-    }
-
-    private static void handlePost(HttpExchange exchange, String path) throws IOException {
-        JsonNode body = readJson(exchange);
-
-        synchronized (LOCK) {
-            ArrayNode fallas = loadData();
-
-            if ("/api/fallas".equals(path)) {
-                String machine = text(body, "codigo_maquina").trim().toUpperCase();
-                String description = text(body, "descripcion").trim();
-                String operator = text(body, "operador").trim();
-
-                if (machine.isEmpty() || description.isEmpty() || operator.isEmpty()) {
-                    sendJson(exchange, 400, object("ok", false,
-                        "mensaje", "Completa el código de máquina, la descripción y el operador.",
-                        "falla", null));
-                    return;
-                }
-
-                for (JsonNode failure : fallas) {
-                    boolean sameMachine = text(failure, "codigo_maquina").equalsIgnoreCase(machine);
-                    boolean sameDescription = text(failure, "descripcion").equalsIgnoreCase(description);
-                    boolean active = !"Solucionada".equals(text(failure, "estado"));
-                    if (sameMachine && sameDescription && active) {
-                        sendJson(exchange, 400, object("ok", false,
-                            "mensaje", "Ya existe una falla igual que todavía no está solucionada.",
-                            "falla", null));
-                        return;
-                    }
-                }
-
-                ObjectNode newFailure = JSON.createObjectNode();
-                newFailure.put("id", generateId(fallas));
-                newFailure.put("codigo_maquina", machine);
-                newFailure.put("descripcion", description);
-                newFailure.put("fecha_hora", OffsetDateTime.now()
-                    .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")));
-                newFailure.put("operador", operator);
-                newFailure.put("tecnico", "Sin asignar");
-                newFailure.put("estado", "Pendiente");
-                newFailure.put("diagnostico", "Sin registrar");
-                newFailure.put("reparacion", "Sin registrar");
-
-                fallas.add(newFailure);
-                saveData(fallas);
-                sendJson(exchange, 201, object("ok", true,
-                    "mensaje", "Reporte " + newFailure.get("id").asText() + " registrado correctamente.",
-                    "falla", newFailure));
-                return;
-            }
-
-            String[] parts = path.split("/");
-            if (parts.length == 5 && "api".equals(parts[1])
-                    && "fallas".equals(parts[2]) && "tecnico".equals(parts[4])) {
-                ObjectNode failure = findFailure(fallas, parts[3]);
-                String technician = text(body, "tecnico").trim();
-
-                if (failure == null) {
-                    sendJson(exchange, 400, object("ok", false, "mensaje", "No se encontró ese reporte."));
-                    return;
-                }
-                if ("Solucionada".equals(failure.path("estado").asText())) {
-                    sendJson(exchange, 400, object("ok", false, "mensaje", "La falla ya está solucionada."));
-                    return;
-                }
-                if (technician.isEmpty()) {
-                    sendJson(exchange, 400, object("ok", false, "mensaje", "Escribe el nombre del técnico."));
-                    return;
-                }
-
-                failure.put("tecnico", technician);
-                if ("Pendiente".equals(failure.path("estado").asText())) {
-                    failure.put("estado", "En diagnóstico");
-                }
-                saveData(fallas);
-                sendJson(exchange, 200, object("ok", true,
-                    "mensaje", "Técnico asignado al reporte " + failure.path("id").asText() + "."));
-                return;
-            }
+        falla.put("tecnico", tecnico);
+        if (falla.path("estado").asText().equals("Pendiente")) {
+            falla.put("estado", "En diagnóstico");
         }
 
-        sendJson(exchange, 404, object("ok", false, "mensaje", "Ruta no encontrada."));
+        guardarFallas(fallas);
+        responder(solicitud, 200, mensaje("Técnico asignado correctamente."));
     }
 
-    private static void handlePatch(HttpExchange exchange, String path) throws IOException {
-        String[] parts = path.split("/");
-        if (parts.length != 4 || !"api".equals(parts[1]) || !"fallas".equals(parts[2])) {
-            sendJson(exchange, 404, object("ok", false, "mensaje", "Ruta no encontrada."));
+    // Actualiza el diagnóstico, la reparación y el estado.
+    static void actualizarFalla(HttpExchange solicitud, String ruta) throws IOException {
+        String id = ruta.substring("/api/fallas/".length());
+        JsonNode datos = JSON.readTree(solicitud.getRequestBody());
+
+        ArrayNode fallas = leerFallas();
+        ObjectNode falla = buscarFalla(fallas, id);
+
+        if (falla == null) {
+            responder(solicitud, 404, mensaje("Reporte no encontrado."));
             return;
         }
 
-        JsonNode body = readJson(exchange);
-        synchronized (LOCK) {
-            ArrayNode fallas = loadData();
-            ObjectNode failure = findFailure(fallas, parts[3]);
+        String estado = texto(datos, "estado");
+        String tecnico = falla.path("tecnico").asText();
 
-            if (failure == null) {
-                sendJson(exchange, 400, object("ok", false, "mensaje", "No se encontró ese reporte."));
-                return;
-            }
-
-            String state = text(body, "estado");
-            boolean valid = false;
-            for (String allowed : ESTADOS) {
-                if (allowed.equals(state)) valid = true;
-            }
-            if (!valid) {
-                sendJson(exchange, 400, object("ok", false, "mensaje", "Selecciona un estado válido."));
-                return;
-            }
-            if ("Solucionada".equals(state)
-                    && "Sin asignar".equals(failure.path("tecnico").asText())) {
-                sendJson(exchange, 400, object("ok", false,
-                    "mensaje", "Asigna un técnico antes de cerrar la falla como solucionada."));
-                return;
-            }
-
-            String diagnosis = text(body, "diagnostico").trim();
-            String repair = text(body, "reparacion").trim();
-            if (!diagnosis.isEmpty()) failure.put("diagnostico", diagnosis);
-            if (!repair.isEmpty()) failure.put("reparacion", repair);
-            failure.put("estado", state);
-
-            saveData(fallas);
-            sendJson(exchange, 200, object("ok", true,
-                "mensaje", "Reporte " + failure.path("id").asText() + " actualizado."));
+        if (estado.equals("Solucionada") && tecnico.equals("Sin asignar")) {
+            responder(solicitud, 400, mensaje("Primero asigna un técnico."));
+            return;
         }
+
+        falla.put("estado", estado);
+        falla.put("diagnostico", texto(datos, "diagnostico"));
+        falla.put("reparacion", texto(datos, "reparacion"));
+
+        guardarFallas(fallas);
+        responder(solicitud, 200, mensaje("Reporte actualizado correctamente."));
     }
 
-    private static ArrayNode loadData() {
-        try {
-            if (!Files.exists(DATA_FILE)) return JSON.createArrayNode();
-            JsonNode data = JSON.readTree(DATA_FILE.toFile());
-            return data != null && data.isArray() ? (ArrayNode) data : JSON.createArrayNode();
-        } catch (IOException e) {
+    // Lee los reportes del archivo JSON.
+    static ArrayNode leerFallas() throws IOException {
+        if (!Files.exists(ARCHIVO)) {
             return JSON.createArrayNode();
         }
+        JsonNode datos = JSON.readTree(ARCHIVO.toFile());
+        return datos != null && datos.isArray()
+                ? (ArrayNode) datos
+                : JSON.createArrayNode();
     }
 
-    private static void saveData(ArrayNode failures) throws IOException {
-        Path temp = DATA_FILE.resolveSibling("datos_casinocontrol.tmp");
-        JSON.writerWithDefaultPrettyPrinter().writeValue(temp.toFile(), failures);
-        Files.move(temp, DATA_FILE, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+    // Guarda los reportes en el archivo JSON.
+    static void guardarFallas(ArrayNode fallas) throws IOException {
+        JSON.writerWithDefaultPrettyPrinter().writeValue(ARCHIVO.toFile(), fallas);
     }
 
-    private static String generateId(ArrayNode failures) {
-        int largest = 0;
-        for (JsonNode failure : failures) {
-            String id = text(failure, "id");
-            try {
-                largest = Math.max(largest, Integer.parseInt(id.split("-")[1]));
-            } catch (Exception ignored) {
-                // Ignora identificadores con formato inesperado.
-            }
-        }
-        return String.format("F-%03d", largest + 1);
-    }
-
-    private static ObjectNode findFailure(ArrayNode failures, String id) {
-        for (JsonNode node : failures) {
-            if (node instanceof ObjectNode failure
-                    && text(failure, "id").equalsIgnoreCase(id)) {
-                return failure;
+    // Busca un reporte por su código.
+    static ObjectNode buscarFalla(ArrayNode fallas, String id) {
+        for (JsonNode dato : fallas) {
+            if (dato.path("id").asText().equalsIgnoreCase(id)) {
+                return (ObjectNode) dato;
             }
         }
         return null;
     }
 
-    private static ArrayNode addElapsedHours(ArrayNode failures) {
-        ArrayNode result = JSON.createArrayNode();
-        for (JsonNode node : failures) {
-            ObjectNode copy = node.deepCopy();
-            try {
-                OffsetDateTime date = java.time.LocalDateTime
-                    .parse(text(node, "fecha_hora"),
-                        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
-                    .atZone(ZoneId.systemDefault()).toOffsetDateTime();
-                double hours = Math.max(0, Duration.between(date, OffsetDateTime.now()).toMinutes() / 60.0);
-                copy.put("horas_transcurridas", Math.round(hours * 10.0) / 10.0);
-            } catch (Exception e) {
-                copy.put("horas_transcurridas", 0);
-            }
-            result.add(copy);
-        }
-        return result;
+    static String texto(JsonNode datos, String campo) {
+        JsonNode valor = datos.get(campo);
+        return valor == null ? "" : valor.asText();
     }
 
-    private static JsonNode readJson(HttpExchange exchange) throws IOException {
-        byte[] bytes = exchange.getRequestBody().readNBytes(100_001);
-        if (bytes.length == 0 || bytes.length > 100_000) return JSON.createObjectNode();
-        try {
-            return JSON.readTree(new String(bytes, StandardCharsets.UTF_8));
-        } catch (Exception e) {
-            return JSON.createObjectNode();
-        }
+    static ObjectNode mensaje(String texto) {
+        ObjectNode respuesta = JSON.createObjectNode();
+        respuesta.put("ok", true);
+        respuesta.put("mensaje", texto);
+        return respuesta;
     }
 
-    private static String text(JsonNode node, String field) {
-        JsonNode value = node == null ? null : node.get(field);
-        return value == null || value.isNull() ? "" : value.asText();
-    }
-
-    private static ObjectNode object(Object... values) {
-        ObjectNode result = JSON.createObjectNode();
-        for (int i = 0; i < values.length; i += 2) {
-            String key = (String) values[i];
-            Object value = values[i + 1];
-            if (value == null) result.putNull(key);
-            else if (value instanceof String s) result.put(key, s);
-            else if (value instanceof Boolean b) result.put(key, b);
-            else if (value instanceof JsonNode n) result.set(key, n);
-            else result.putPOJO(key, value);
-        }
-        return result;
-    }
-
-    private static void sendJson(HttpExchange exchange, int status, JsonNode data) throws IOException {
-        byte[] response = JSON.writeValueAsBytes(data);
-        Headers headers = exchange.getResponseHeaders();
-        headers.set("Content-Type", "application/json; charset=utf-8");
-        headers.set("Cache-Control", "no-store");
-        exchange.sendResponseHeaders(status, response.length);
-        exchange.getResponseBody().write(response);
+    static void responder(HttpExchange solicitud, int codigo, JsonNode datos) throws IOException {
+        byte[] contenido = JSON.writeValueAsBytes(datos);
+        solicitud.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+        solicitud.sendResponseHeaders(codigo, contenido.length);
+        solicitud.getResponseBody().write(contenido);
     }
 }
