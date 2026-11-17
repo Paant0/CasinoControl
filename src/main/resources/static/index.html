@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+
+<html lang="es">
+
+<head>
+
+  <meta charset="UTF-8">
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>CasinoControl | Seguimiento de fallas</title>
+
+    <link rel="stylesheet" href="styles.css">
+
+</head>
+
+<body>
+
+  <header>
+
+    <h1>CasinoControl</h1>
+
+    <p>Registro y seguimiento de fallas en máquinas electrónicas</p>
+
+  </header>
+
+  <main>
+
+    <div class="intro">
+
+      <div><h2>Panel de mantenimiento</h2><span>Centraliza reportes, técnicos y reparaciones.</span></div>
+
+      <span>Prototipo académico · Datos locales</span>
+
+    </div>
+
+
+
+    <section class="stats" aria-label="Resumen de reportes">
+
+      <div class="stat"><small>Total de reportes</small><strong id="total">0</strong></div>
+
+      <div class="stat"><small>Casos pendientes o en proceso</small><strong id="activos">0</strong></div>
+
+      <div class="stat"><small>Casos solucionados</small><strong id="solucionados">0</strong></div>
+
+    </section>
+
+
+
+    <div id="mensaje" class="message" role="status" aria-live="polite"></div>
+
+
+
+    <section class="forms">
+
+      <form class="panel" id="formRegistro">
+
+        <h3>1. Registrar una falla</h3>
+
+        <label for="maquina">Código de máquina</label>
+
+        <input id="maquina" placeholder="Ej. M-012" required maxlength="20">
+
+        <label for="descripcion">Descripción de la falla</label>
+
+        <textarea id="descripcion" placeholder="Ej. Error de pantalla" required maxlength="250"></textarea>
+
+        <label for="operador">Operador que reporta</label>
+
+        <input id="operador" placeholder="Nombre del operador" required maxlength="80">
+
+        <button class="primary" type="submit">Registrar reporte</button>
+
+      </form>
+
+
+
+      <form class="panel" id="formTecnico">
+
+        <h3>2. Asignar un técnico</h3>
+
+        <label for="idTecnico">Código del reporte</label>
+
+        <input id="idTecnico" placeholder="Ej. F-001" required>
+
+        <label for="nombreTecnico">Nombre del técnico</label>
+
+        <input id="nombreTecnico" placeholder="Nombre del técnico" required maxlength="80">
+
+        <button class="primary" type="submit">Asignar técnico</button>
+
+      </form>
+
+
+
+      <form class="panel" id="formActualizacion">
+
+        <h3>3. Actualizar reparación</h3>
+
+        <label for="idActualizacion">Código del reporte</label>
+
+        <input id="idActualizacion" placeholder="Ej. F-001" required>
+
+        <label for="estado">Nuevo estado</label>
+
+        <select id="estado" required>
+
+          <option value="En diagnóstico">En diagnóstico</option>
+
+          <option value="En reparación">En reparación</option>
+
+          <option value="Solucionada">Solucionada</option>
+
+          <option value="Pendiente">Pendiente</option>
+
+        </select>
+
+        <label for="diagnostico">Diagnóstico</label>
+
+        <input id="diagnostico" placeholder="Qué problema se encontró">
+
+        <label for="reparacion">Reparación realizada</label>
+
+        <input id="reparacion" placeholder="Qué trabajo se realizó">
+
+        <button class="primary" type="submit">Guardar actualización</button>
+
+      </form>
+
+    </section>
+
+
+
+    <section class="panel">
+
+      <div class="table-head">
+
+        <h3>Reportes de fallas</h3>
+
+        <button class="refresh" id="btnActualizar" type="button">Actualizar lista</button>
+
+      </div>
+
+      <div class="table-wrap">
+
+        <table>
+
+          <thead><tr><th>ID</th><th>Máquina</th><th>Falla</th><th>Fecha y hora</th><th>Operador</th><th>Técnico</th><th>Estado</th><th>Tiempo</th></tr></thead>
+
+          <tbody id="tablaFallas"><tr><td colspan="8" class="empty">Cargando reportes...</td></tr></tbody>
+
+        </table>
+
+      </div>
+
+    </section>
+
+  </main>
+
+  <footer>CasinoControl · Prototipo local para la sustentación del proyecto final.</footer>
+
+
+
+  <script>
+
+    const $ = (id) => document.getElementById(id);
+
+
+
+    function escapar(valor) {
+
+      return String(valor ?? '').replace(/[&<>"']/g, caracter => ({
+
+        '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+
+      })[caracter]);
+
+    }
+
+
+
+    function mostrarMensaje(texto, tipo='ok') {
+
+      const caja = $('mensaje');
+
+      caja.textContent = texto;
+
+      caja.className = `message ${tipo}`;
+
+      window.scrollTo({top:0, behavior:'smooth'});
+
+    }
+
+
+
+    async function solicitar(url, opciones={}) {
+
+      const respuesta = await fetch(url, {
+
+        headers:{'Content-Type':'application/json'},
+
+        ...opciones
+
+      });
+
+      const datos = await respuesta.json();
+
+      if (!respuesta.ok || datos.ok === false) throw new Error(datos.mensaje || 'Ocurrió un error.');
+
+      return datos;
+
+    }
+
+
+
+    async function cargarFallas() {
+
+      try {
+
+        const datos = await solicitar('/api/fallas');
+
+        const fallas = datos.fallas || [];
+
+        $('total').textContent = fallas.length;
+
+        $('activos').textContent = fallas.filter(f => f.estado !== 'Solucionada').length;
+
+        $('solucionados').textContent = fallas.filter(f => f.estado === 'Solucionada').length;
+
+        const cuerpo = $('tablaFallas');
+
+        if (!fallas.length) {
+
+          cuerpo.innerHTML = '<tr><td colspan="8" class="empty">Todavía no hay reportes. Registra la primera falla.</td></tr>';
+
+          return;
+
+        }
+
+        cuerpo.innerHTML = fallas.map(f => {
+
+          const clase = f.estado === 'Solucionada' ? 'solved' : (f.estado === 'Pendiente' ? '' : 'work');
+
+          return `<tr>
+
+            <td><strong>${escapar(f.id)}</strong></td>
+
+            <td>${escapar(f.codigo_maquina)}</td>
+
+            <td>${escapar(f.descripcion)}<br><small>Dx: ${escapar(f.diagnostico)}</small></td>
+
+            <td>${escapar(f.fecha_hora)}</td>
+
+            <td>${escapar(f.operador)}</td>
+
+            <td>${escapar(f.tecnico)}</td>
+
+            <td><span class="status ${clase}">${escapar(f.estado)}</span></td>
+
+            <td>${Number(f.horas_transcurridas || 0).toFixed(1)} h</td>
+
+          </tr>`;
+
+        }).join('');
+
+      } catch (error) {
+
+        mostrarMensaje(error.message, 'error');
+
+      }
+
+    }
+
+
+
+    $('formRegistro').addEventListener('submit', async (evento) => {
+
+      evento.preventDefault();
+
+      try {
+
+        const datos = await solicitar('/api/fallas', {
+
+          method:'POST',
+
+          body:JSON.stringify({
+
+            codigo_maquina:$('maquina').value,
+
+            descripcion:$('descripcion').value,
+
+            operador:$('operador').value
+
+          })
+
+        });
+
+        mostrarMensaje(datos.mensaje);
+
+        evento.target.reset();
+
+        await cargarFallas();
+
+      } catch (error) { mostrarMensaje(error.message, 'error'); }
+
+    });
+
+
+
+    $('formTecnico').addEventListener('submit', async (evento) => {
+
+      evento.preventDefault();
+
+      try {
+
+        const id = encodeURIComponent($('idTecnico').value.trim());
+
+        const datos = await solicitar(`/api/fallas/${id}/tecnico`, {
+
+          method:'POST', body:JSON.stringify({tecnico:$('nombreTecnico').value})
+
+        });
+
+        mostrarMensaje(datos.mensaje);
+
+        evento.target.reset();
+
+        await cargarFallas();
+
+      } catch (error) { mostrarMensaje(error.message, 'error'); }
+
+    });
+
+
+
+    $('formActualizacion').addEventListener('submit', async (evento) => {
+
+      evento.preventDefault();
+
+      try {
+
+        const id = encodeURIComponent($('idActualizacion').value.trim());
+
+        const datos = await solicitar(`/api/fallas/${id}`, {
+
+          method:'PATCH',
+
+          body:JSON.stringify({
+
+            estado:$('estado').value,
+
+            diagnostico:$('diagnostico').value,
+
+            reparacion:$('reparacion').value
+
+          })
+
+        });
+
+        mostrarMensaje(datos.mensaje);
+
+        evento.target.reset();
+
+        await cargarFallas();
+
+      } catch (error) { mostrarMensaje(error.message, 'error'); }
+
+    });
+
+
+
+    $('btnActualizar').addEventListener('click', cargarFallas);
+
+    cargarFallas();
+
+  </script>
+
+</body>
+
+</html>

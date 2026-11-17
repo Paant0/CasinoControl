@@ -1,0 +1,16 @@
+CasinoControl en Java 21
+
+1. Instala Java 21 y Maven.
+2. Copia tu index.html y styles.css actuales en:
+   src/main/resources/static/
+3. Abre una terminal en esta carpeta.
+4. Ejecuta: mvn compile exec:java
+5. Abre: http://127.0.0.1:8000
+
+La API conserva las rutas:
+GET    /api/fallas
+POST   /api/fallas
+POST   /api/fallas/{id}/tecnico
+PATCH  /api/fallas/{id}
+
+Los datos se guardan en datos_casinocontrol.json en la carpeta desde donde ejecutes Maven.

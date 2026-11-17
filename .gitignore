@@ -1,0 +1,15 @@
+# Archivos compilados de Java y Maven
+target/
+*.class
+
+# Datos locales de CasinoControl
+datos_casinocontrol.json
+datos_casinocontrol.tmp
+
+# Configuración personal del editor
+.vscode/
+.idea/
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
